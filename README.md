@@ -1,5 +1,8 @@
 # BetterReplay
 
+If you encounter any problems while using this modified version, please submit them on the Issues page of this repository. Please do not disturb the original author.
+如果你在使用本修改版时遇到任何问题，请在此仓库的 Issues 页面提交，请勿打扰原作者
+
 BetterReplay is a server-side replay plugin for Paper and Folia-style scheduling.
 It records player and nearby entity activity on the server, saves the timeline, and replays it for viewers in-game.
 
