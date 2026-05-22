@@ -131,7 +131,8 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                 final int page = parsedPage;
 
                 replayManager.listSavedReplays()
-                        .thenAccept(replays -> Bukkit.getScheduler().runTask(Replay.getInstance(), () -> {
+                        .thenAccept(replays -> {
+                            Replay.getInstance().getServer().getGlobalRegionScheduler().execute(Replay.getInstance(), () -> {
                             if (replays.isEmpty()) {
                                 p.sendMessage("§cNo replays found.");
                                 return;
