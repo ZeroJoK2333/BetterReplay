@@ -16,6 +16,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
+import java.util.Locale;
 
 public class ReplayCommand implements CommandExecutor, TabCompleter {
     private final ReplayManager replayManager;
@@ -26,221 +27,173 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-        if (!(sender instanceof Player p)) {
-            sender.sendMessage("Must be a player to execute this command");
-            return true;
+        Player player = null;
+        if (sender instanceof Player p) {
+            player = p;
         }
 
         if (args.length == 0) {
-            sendHelp(p);
+            sendHelp(sender);
             return true;
         }
 
-        switch (args[0].toLowerCase()) {
-            case "start" -> {
-                if (!p.hasPermission("replay.start")) {
-                    p.sendMessage("You do not have permission");
-                    return true;
-                }
-                if (args.length < 3) {
-                    p.sendMessage("§cUsage: /replay start <name> <player1 player2 ...> [durationSeconds]");
-                    return true;
-                }
+        String subCommand = args[0].toLowerCase(Locale.ROOT);
 
-                String sessionName = args[1];
-                int duration = -1;
+            switch (subCommand) {
+                case "start" -> {
+                    String sessionName = args.length > 1 ? args[1] : "recording_" + System.currentTimeMillis();
+                    int duration = 60;
 
-                try {
-                    duration = Integer.parseInt(args[args.length - 1]);
-                } catch (NumberFormatException ignored) {}
+                    if (args.length >= 4) {
+                        try {
+                            duration = Integer.parseInt(args[args.length - 1]);
+                        } catch (NumberFormatException ignored) {}
+                    }
 
-                int endIndex = (duration != -1 ? args.length - 1 : args.length);
+                    List<Player> targets = new ArrayList<>();
+                    int endIdx = args.length;
+                    if (args.length >= 4 && args[args.length-1].matches("\\d+")) {
+                        endIdx = args.length - 1;
+                    }
 
-                String[] playerNames = new String[endIndex - 2];
-                System.arraycopy(args, 2, playerNames, 0, endIndex - 2);
+                    for (int i = 2; i < endIdx; i++) {
+                        Player target = Bukkit.getPlayerExact(args[i]);
+                        if (target != null) {
+                            targets.add(target);
+                        } else {
+                            sender.sendMessage("§cPlayer not found: " + args[i]);
+                        }
+                    }
 
-                List<Player> targets = new ArrayList<>();
-                for (String pn : playerNames) {
-                    Player target = Bukkit.getPlayerExact(pn);
-                    if (target != null) {
-                        targets.add(target);
+                    if (targets.isEmpty()) {
+                        sender.sendMessage("§cNo valid players to record.");
+                        return true;
+                    }
+
+                    if (replayManager.startRecording(sessionName, targets, duration)) {
+                        sender.sendMessage("§aStarted recording session: " + sessionName + " (" + duration + "s)");
                     } else {
-                        p.sendMessage("§cPlayer not found: " + pn);
+                        sender.sendMessage("§cSession with that name already exists!");
                     }
                 }
 
-                if (targets.isEmpty()) {
-                    p.sendMessage("§cNo valid players to record.");
-                    return true;
-                }
-
-                if (replayManager.startRecording(sessionName, targets, duration)) {
-                    p.sendMessage("§aStarted recording session: " + sessionName + " (" +
-                            (duration == -1 ? "∞" : duration + "s") + ")");
-                } else {
-                    p.sendMessage("§cSession with that name already exists!");
-                }
-            }
-            case "stop" -> {
-                if (!p.hasPermission("replay.stop")) {
-                    p.sendMessage("You do not have permission");
-                    return true;
-                }
-                if (args.length < 2) {
-                    p.sendMessage("§c/replay stop <name>");
-                    return true;
-                }
-                String sessionName = joinArgs(args, 1);
-                if (replayManager.stopRecording(sessionName, true)) {
-                    p.sendMessage("§aStopped recording session: " + sessionName);
-                } else {
-                    p.sendMessage("§cNo active session with that name!");
-                }
-            }
-            case "play" -> {
-                if (!p.hasPermission("replay.play")) {
-                    p.sendMessage("You do not have permission");
-                    return true;
-                }
-                if (args.length < 2) {
-                    p.sendMessage("§c/replay play <name>");
-                    return true;
-                }
-                String replayName = joinArgs(args, 1);
-                replayManager.startReplay(replayName, p);
-
-                return true;
-            }
-
-            case "list" -> {
-                if (!p.hasPermission("replay.list")) {
-                    p.sendMessage("You do not have permission");
-                    return true;
-                }
-
-                int parsedPage = 1;
-                if (args.length >= 2) {
-                    try {
-                        parsedPage = Math.max(1, Integer.parseInt(args[1]));
-                    } catch (NumberFormatException ignored) {
-                        p.sendMessage("§c/replay list [page]");
+                case "stop" -> {
+                    if (args.length < 2) {
+                        sender.sendMessage("§cUsage: /replay stop <name>");
                         return true;
                     }
+                    String sessionName = joinArgs(args, 1);
+                    if (replayManager.stopRecording(sessionName, true)) {
+                        sender.sendMessage("§aStopped recording session: " + sessionName);
+                    } else {
+                        sender.sendMessage("§cNo active session with that name!");
+                    }
                 }
 
-                final int page = parsedPage;
-
-                replayManager.listSavedReplays()
-                        .thenAccept(replays -> {
-                            Replay.getInstance().getServer().getGlobalRegionScheduler().execute(Replay.getInstance(), () -> {
-                            if (replays.isEmpty()) {
-                                p.sendMessage("§cNo replays found.");
-                                return;
-                            }
-
-                            int perPage = Replay.getInstance().getConfig().getInt("list-page-size", 10);
-                            int totalPages = (int) Math.ceil((double) replays.size() / perPage);
-
-                            if (page > totalPages) {
-                                p.sendMessage("§cPage out of range. Max page: " + totalPages);
-                                return;
-                            }
-
-                            int from = (page - 1) * perPage;
-                            int to = Math.min(from + perPage, replays.size());
-
-                            p.sendMessage("§6Replays §7(Page " + page + "/" + totalPages + ")");
-                            for (int i = from; i < to; i++) {
-                                p.sendMessage("§e- §f" + replays.get(i));
-                            }
-
-                            Component navigation = Component.empty();
-
-                            if (page > 1) {
-                                navigation = navigation.append(
-                                        Component.text("§e[Previous]")
-                                                .clickEvent(ClickEvent.runCommand("/replay list " + (page - 1)))
-                                                .hoverEvent(HoverEvent.showText(Component.text("Go to page " + (page - 1))))
-                                );
-                            } else {
-                                navigation = navigation.append(Component.text("§7[Previous]"));
-                            }
-
-                            navigation = navigation.append(Component.text(" §8| "));
-
-                            if (page < totalPages) {
-                                navigation = navigation.append(
-                                        Component.text("§e[Next]")
-                                                .clickEvent(ClickEvent.runCommand("/replay list " + (page + 1)))
-                                                .hoverEvent(HoverEvent.showText(Component.text("Go to page " + (page + 1))))
-                                );
-                            } else {
-                                navigation = navigation.append(Component.text("§7[Next]"));
-                            }
-
-                            p.sendMessage(navigation);
-                        }))
-                        .exceptionally(ex -> {
-                            Replay.getInstance().getLogger().log(Level.SEVERE, "Failed to print list", ex);
-                            return null;
-                        });
-
-                return true;
-            }
-
-            case "delete" -> {
-                if (!p.hasPermission("replay.delete")) {
-                    p.sendMessage("You do not have permission");
-                    return true;
+                case "play" -> {
+                    if (!(sender instanceof Player p)) {
+                        sender.sendMessage("§c/play command can only be executed by a player!");
+                        return true;
+                    }
+                    if (args.length < 2) {
+                        sender.sendMessage("§cUsage: /replay play <name>");
+                        return true;
+                    }
+                    String replayName = joinArgs(args, 1);
+                    replayManager.startReplay(replayName, p);
                 }
-                if (args.length < 2) {
-                    sender.sendMessage("Usage: /replay delete <name>");
-                    return true;
-                }
-                String name = joinArgs(args, 1);
-                replayManager.deleteSavedReplay(name)
-                        .thenAccept(success -> {
-                            Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task -> {
-                                if (success) {
-                                    p.sendMessage("§aDeleted replay: " + name);
-                                } else {
-                                    p.sendMessage("§cReplay not found: " + name);
-                                }
+
+                case "list" -> {
+                    int parsedPage = 1;
+                    if (args.length >= 2) {
+                        try {
+                            parsedPage = Math.max(1, Integer.parseInt(args[1]));
+                        } catch (NumberFormatException ignored) {
+                            sender.sendMessage("§cUsage: /replay list [page]");
+                            return true;
+                        }
+                    }
+
+                    final int page = parsedPage;
+
+                    replayManager.listSavedReplays()
+                            .thenAccept(replays -> {
+                                Replay.getInstance().getServer().getGlobalRegionScheduler().execute(Replay.getInstance(), () -> {
+                                    if (replays.isEmpty()) {
+                                        sender.sendMessage("§cNo replays found.");
+                                        return;
+                                    }
+
+                                    int perPage = Replay.getInstance().getConfig().getInt("list-page-size", 10);
+                                    int totalPages = (int) Math.ceil((double) replays.size() / perPage);
+
+                                    if (page > totalPages) {
+                                        sender.sendMessage("§cPage out of range. Max page: " + totalPages);
+                                        return;
+                                    }
+
+                                    int from = (page - 1) * perPage;
+                                    int to = Math.min(from + perPage, replays.size());
+
+                                    sender.sendMessage("§6Replays §7(Page " + page + "/" + totalPages + ")");
+                                    for (int i = from; i < to; i++) {
+                                        sender.sendMessage("§e- §f" + replays.get(i));
+                                    }
+                                });
                             });
-                        })
-                        .exceptionally(ex -> {
-                            Replay.getInstance().getLogger().log(Level.SEVERE, "Failed to delete replay: " + name, ex);
-                            Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task ->
-                                    p.sendMessage("§cFailed to delete replay: " + name));
-                            return null;
-                        });
+                    return true;
+                }
+
+                case "delete" -> {
+                    if (args.length < 2) {
+                        sender.sendMessage("§cUsage: /replay delete <name>");
                         return true;
+                    }
+                    String name = joinArgs(args, 1);
+                    replayManager.deleteSavedReplay(name)
+                            .thenAccept(success -> {
+                                Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task -> {
+                                    if (success) {
+                                        sender.sendMessage("§aDeleted replay: " + name);
+                                    } else {
+                                        sender.sendMessage("§cReplay not found: " + name);
+                                    }
+                                });
+                            });
+                    return true;
+                }
+
+                default -> {
+                    sender.sendMessage("§cUnknown subcommand: §f" + args[0]);
+                    sendHelp(sender);
+                }
             }
-            default -> {
-                p.sendMessage("§cUnknown subcommand: §f" + args[0]);
-                sendHelp(p);
-            }
-        }
-        return true;
+            return true;
     }
 
-    private void sendHelp(Player p) {
-        p.sendMessage("§6§lBetterReplay Commands:");
-        if (p.hasPermission("replay.start"))
-            p.sendMessage("§e/replay start <name> <player1 player2 ...> [seconds] §7- Start recording");
-        if (p.hasPermission("replay.stop")) {
-            p.sendMessage("§e/replay stop <name> §7- Stop an active recording");
+    private void sendHelp(CommandSender sender) {
+        sender.sendMessage("§6§lBetterReplay Commands:");
+
+        if (sender.hasPermission("replay.start"))
+            sender.sendMessage("§e/replay start <name> <player1 player2 ...> [seconds] §7- Start recording");
+
+        if (sender.hasPermission("replay.stop")) {
+            sender.sendMessage("§e/replay stop <name> §7- Stop an active recording");
+
             var sessions = replayManager.getActiveRecordings();
             if (!sessions.isEmpty()) {
-                p.sendMessage("§7  Active: §f" + String.join("§7, §f", sessions));
+                sender.sendMessage("§7  Active: §f" + String.join("§7, §f", sessions));
             }
         }
-        if (p.hasPermission("replay.play"))
-            p.sendMessage("§e/replay play <name> §7- Play a saved replay");
-        if (p.hasPermission("replay.list"))
-            p.sendMessage("§e/replay list [page] §7- List saved replays");
-        if (p.hasPermission("replay.delete"))
-            p.sendMessage("§e/replay delete <name> §7- Delete a saved replay");
+
+        if (sender.hasPermission("replay.play"))
+            sender.sendMessage("§e/replay play <name> §7- Play a saved replay");
+
+        if (sender.hasPermission("replay.list"))
+            sender.sendMessage("§e/replay list [page] §7- List saved replays");
+
+        if (sender.hasPermission("replay.delete"))
+            sender.sendMessage("§e/replay delete <name> §7- Delete a saved replay");
     }
 
     @Override
